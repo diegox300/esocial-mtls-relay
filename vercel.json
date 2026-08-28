@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/relay.ts": {
+      "maxDuration": 30
+    }
+  }
+}

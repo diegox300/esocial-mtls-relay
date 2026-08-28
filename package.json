@@ -1,0 +1,16 @@
+{
+  "name": "esocial-mtls-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Relay mTLS para o eSocial, hospedado na Vercel (Node.js runtime). Ver README.md.",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel deploy --prod"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@vercel/node": "^3.0.0",
+    "typescript": "^5.4.0",
+    "vercel": "^34.0.0"
+  }
+}
