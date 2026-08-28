@@ -11,6 +11,14 @@
 // no runtime Node.js da Vercel, não no Edge Runtime (sem acesso a socket TLS
 // bruto). `export const config` abaixo fixa isso.
 //
+// Por que extrair key/cert do PFX com node-forge em vez de entregar o PFX
+// direto ao `https.request({ pfx, passphrase })`: o OpenSSL nativo que o Node
+// usa para TLS recusa PKCS12 com criptografia legada (RC2-40/3DES, comum em
+// certificados e-CNPJ A1 mais antigos) desde que o OpenSSL 3.x desativou esses
+// algoritmos por padrão — falha com "Unsupported PKCS12 PFX data" mesmo com
+// PFX e senha corretos (confirmado em produção). O node-forge é puro
+// JavaScript e não tem essa restrição.
+//
 // Segurança:
 // - Autenticação por segredo compartilhado (Authorization: Bearer <RELAY_SHARED_SECRET>),
 //   comparado em tempo constante.
@@ -27,6 +35,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import https from "node:https";
 import { URL } from "node:url";
 import crypto from "node:crypto";
+import forge from "node-forge";
 
 export const config = {
   runtime: "nodejs",
@@ -34,10 +43,9 @@ export const config = {
 
 const RELAY_SHARED_SECRET = process.env.RELAY_SHARED_SECRET || "";
 
-// Hosts oficiais do webservice do eSocial. Confirme a lista vigente na
-// documentação técnica oficial do eSocial antes de usar em produção — nomes de
-// host de ambiente de produção restrita (homologação) e produção mudam raramente,
-// mas mudam. Adicione aqui, nunca aceite host fora desta lista.
+// Hosts oficiais do webservice do eSocial. Confirmados contra
+// base44/functions/esocialGovDireto/entry.ts (ENDPOINTS, linhas 30-39), que já
+// usa esses mesmos hosts em produção — não são um palpite genérico.
 const DEFAULT_ALLOWED_HOSTS = [
   "webservices.producaorestrita.esocial.gov.br", // homologação / produção restrita (envio + consulta)
   "webservices.esocial.gov.br", // produção — envio de lotes
@@ -78,13 +86,55 @@ interface RelayResponseBody {
   headers: Record<string, string>;
 }
 
+/**
+ * Extrai a chave privada e o certificado de um PFX/PKCS12, em PEM, usando o
+ * node-forge (JavaScript puro).
+ *
+ * Por que não entregar o PFX direto ao `https.request({ pfx, passphrase })`:
+ * o OpenSSL nativo que o Node usa para TLS (diferente do node-forge, que é
+ * puramente JS) recusa PKCS12 com criptografia legada — RC2-40/3DES, comum
+ * em certificados e-CNPJ A1 mais antigos — desde que o OpenSSL 3.x desativou
+ * esses algoritmos por padrão. Isso falha com "Unsupported PKCS12 PFX data",
+ * mesmo com o PFX e a senha corretos (confirmado em produção: o mesmo PFX
+ * que o node-forge abre sem problema quebra o parser nativo do Node).
+ * Extraindo key+cert em PEM aqui e usando `{ key, cert }` no lugar de
+ * `{ pfx, passphrase }` evita depender do parser PKCS12 nativo do OpenSSL
+ * por completo — só a etapa de TLS em si (apresentar o certificado já
+ * decodificado) continua nativa.
+ */
+function extractKeyAndCertFromPfx(pfxBuffer: Buffer, password: string): { keyPem: string; certPem: string } {
+  const p12Der = pfxBuffer.toString("binary");
+  const p12Asn1 = forge.asn1.fromDer(p12Der);
+  const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, false, password);
+
+  let keyPem: string | null = null;
+  let certPem: string | null = null;
+
+  for (const safeContents of p12.safeContents) {
+    for (const safeBag of safeContents.safeBags) {
+      if (!keyPem && (safeBag.type === forge.pki.oids.pkcs8ShroudedKeyBag || safeBag.type === forge.pki.oids.keyBag) && safeBag.key) {
+        keyPem = forge.pki.privateKeyToPem(safeBag.key);
+      }
+      if (!certPem && safeBag.type === forge.pki.oids.certBag && safeBag.cert) {
+        certPem = forge.pki.certificateToPem(safeBag.cert);
+      }
+    }
+  }
+
+  if (!keyPem || !certPem) {
+    throw new Error("Não foi possível extrair chave privada e certificado do PFX (verifique a senha).");
+  }
+
+  return { keyPem, certPem };
+}
+
 function doMtlsRequest(params: {
   targetUrl: URL;
   method: string;
   headers: Record<string, string>;
   body: string;
-  pfx: Buffer;
-  passphrase: string;
+  keyPem: string;
+  certPem: string;
   timeoutMs: number;
 }): Promise<RelayResponseBody> {
   return new Promise((resolve, reject) => {
@@ -98,9 +148,9 @@ function doMtlsRequest(params: {
           ...params.headers,
           "Content-Length": Buffer.byteLength(params.body),
         },
-        pfx: params.pfx,
-        passphrase: params.passphrase,
-        // mTLS é bidirecional: exige certificado do cliente (pfx acima) E
+        key: params.keyPem,
+        cert: params.certPem,
+        // mTLS é bidirecional: exige certificado do cliente (key/cert acima) E
         // valida o certificado do servidor do governo. Nunca desative isto.
         rejectUnauthorized: true,
         timeout: params.timeoutMs,
@@ -200,11 +250,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  let pfx: Buffer;
+  let keyPem: string, certPem: string;
   try {
-    pfx = Buffer.from(cert_pfx_base64, "base64");
-  } catch {
-    res.status(400).json({ error: "cert_pfx_base64 inválido." });
+    const pfx = Buffer.from(cert_pfx_base64, "base64");
+    ({ keyPem, certPem } = extractKeyAndCertFromPfx(pfx, cert_password));
+  } catch (err) {
+    res.status(400).json({
+      error: `Falha ao processar cert_pfx_base64/cert_password: ${err instanceof Error ? err.message : String(err)}`,
+    });
     return;
   }
 
@@ -214,8 +267,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       method: method || "POST",
       headers: headers || {},
       body,
-      pfx,
-      passphrase: cert_password,
+      keyPem,
+      certPem,
       timeoutMs: Number(process.env.RELAY_TIMEOUT_MS || 30000),
     });
 
