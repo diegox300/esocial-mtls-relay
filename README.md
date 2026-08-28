@@ -58,9 +58,12 @@ adiciona uma **allowlist de host de destino** (`ESOCIAL_ALLOWED_HOSTS` ou o
 padrão embutido no código): só hosts do webservice do eSocial passam. Confirme
 a lista de hosts oficiais vigente na documentação técnica do eSocial antes de
 ir para produção — os nomes usados aqui (`webservices.producaorestrita.esocial.gov.br`
-para homologação/produção restrita, `webservices.envio.esocial.gov.br` e
-`webservices.consulta.esocial.gov.br` para produção) são os conhecidos no
-momento em que este relay foi escrito, mas o governo pode mudar isso.
+para homologação/produção restrita, `webservices.esocial.gov.br` e
+`webservices.consulta.esocial.gov.br` para produção) foram confirmados contra
+`base44/functions/esocialGovDireto/entry.ts` (constante `ENDPOINTS`) no
+repositório principal, que já usa esses mesmos hosts — não é um palpite.
+Ainda assim, confirme contra a documentação oficial se o governo anunciar
+mudança.
 
 ## Deploy na Vercel
 

@@ -39,8 +39,8 @@ const RELAY_SHARED_SECRET = process.env.RELAY_SHARED_SECRET || "";
 // host de ambiente de produção restrita (homologação) e produção mudam raramente,
 // mas mudam. Adicione aqui, nunca aceite host fora desta lista.
 const DEFAULT_ALLOWED_HOSTS = [
-  "webservices.producaorestrita.esocial.gov.br", // homologação / produção restrita
-  "webservices.envio.esocial.gov.br", // produção — envio de lotes
+  "webservices.producaorestrita.esocial.gov.br", // homologação / produção restrita (envio + consulta)
+  "webservices.esocial.gov.br", // produção — envio de lotes
   "webservices.consulta.esocial.gov.br", // produção — consulta de lotes
 ];
 
